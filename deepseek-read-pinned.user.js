@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name DeepSeek 读置顶对话（记忆库自动注入）
 // @namespace https://github.com/yinlu332-netizen/deepseek-read-pinned
-// @version 0.2.1
-// @description 新开 DeepSeek 对话时，自动读取置顶的“记忆库”对话并注入为记忆。v0.2.1：历史接口需 Bearer token 鉴权（仅 cookie 会报 INVALID_TOKEN），改为从 localStorage/sessionStorage/cookie 自动找 token 并带 Authorization 头；其余同 v0.2.0。
+// @version 0.2.2
+// @description 新开 DeepSeek 对话时，自动读取置顶的“记忆库”对话并注入为记忆。v0.2.2：状态标记显示诊断信息（版本号、token 有无、API 返回码），不用开控制台就能定位失败原因；其余同 v0.2.1。
 // @author 陆隐 / 小银
 // @match https://chat.deepseek.com/*
 // @grant none
@@ -23,8 +23,8 @@ COMPLETION_PATH: '/api/v0/chat/completion',
 MAX_MEMORY_CHARS: 8000, // 记忆块总长上限，超出截断
 MAX_BACKGROUND_CHARS: 2500, // 背景（账号状态）部分上限，超出只留摘要
 TOAST_MS: 3000,
-BLOCK_BEGIN: '[[PINMEM:v2.1 BEGIN]]',
-BLOCK_END: '[[PINMEM:v2.1 END]]'
+BLOCK_BEGIN: '[[PINMEM:v2.2 BEGIN]]',
+BLOCK_END: '[[PINMEM:v2.2 END]]'
 };
 // 安全：只读置顶对话的文字记录，不从 GitHub 拉记忆库文件；
 // 记忆只存在浏览器内存里，不写 localStorage。
@@ -82,12 +82,13 @@ var m = document.cookie.match(/(?:^|;\s*)token=([^;]+)/);
 if (m && m[1]) { log('token 来源：cookie token'); return decodeURIComponent(m[1]);}
 } catch (e5) {}
 log('未找到 token（历史接口将报 INVALID_TOKEN）');
+diag.token = '无 token';
 return '';
 }
 function authHeaders() {
 var t = getAuthToken();
 var h = {};
-if (t) h['Authorization'] = 'Bearer ' + t;
+if (t) { h['Authorization'] = 'Bearer ' + t; diag.token = '有 token';}
 return h;
 }
 
@@ -127,6 +128,8 @@ return out;
 
 /* ================= 记忆缓存 ================= */
 var memCache = { text: '', at: 0, ok: false};
+// 诊断：记录 token 与 API 的最后状态，显示在状态标记里（不用开控制台就能看到失败原因）。
+var diag = { token: '未知', apiCode: ''};
 
 /* ================= 读置顶对话 ================= */
 function fetchChatList() {
@@ -151,7 +154,8 @@ var url = CFG.HISTORY_URL + '?chat_session_id=' + encodeURIComponent(sessionId);
 return fetch(url, { credentials: 'include', headers: authHeaders()})
 .then(function (r) { return r.json();})
 .then(function (j) {
-if (j && j.code !== undefined && j.code !== 0) { log('历史 API 返回 code', j.code, j.msg); return '';}
+if (j && j.code !== undefined && j.code !== 0) { diag.apiCode = 'API ' + j.code; log('历史 API 返回 code', j.code, j.msg); return '';}
+diag.apiCode = 'API 0';
 var msgs = (j && j.data && (j.data.messages || j.data.history || j.data.list)) || j.data || j.messages || [];
 if (!Array.isArray(msgs)) return '';
 var out = [];
@@ -197,7 +201,7 @@ return '';
 }).then(function (hist) {
 if (!hist) {
 memCache = { text: '', at: Date.now(), ok: false};
-status('记忆：未注入（置顶对话没读到）', false);
+status('记忆：未注入 v0.2.1（' + diag.token + (diag.apiCode? '，' + diag.apiCode: '') + '）', false);
 return '';
 }
 var parts = splitMemory(hist);
@@ -375,7 +379,7 @@ document.addEventListener('DOMContentLoaded', function () { buildMemory();});
 } else {
 buildMemory();
 }
-log('已启动 v0.2.1');
+log('已启动 v0.2.2');
 }
 boot();
 })();
