@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name DeepSeek 读置顶对话（记忆库自动注入）
 // @namespace https://github.com/yinlu332-netizen/deepseek-read-pinned
-// @version 0.2.9
-// @description 新开 DeepSeek 对话时，自动读取置顶的“记忆库”对话并注入为记忆。v0.2.9：按 DeepSeek 二次回复重排内容提取入口——content（string/array）→content_text/contentText→thinking/tool→contentFragments（仅 kind=text），只拼 user/assistant；其余同 v0.2.8。
+// @version 0.3.0
+// @description 新开 DeepSeek 对话时，自动读取置顶的“记忆库”对话并注入为记忆。v0.3.0：置顶对话换成只含最高协议的新对话（session 71688521-faae-4714-bbc6-d908380f7170），旧对话（2ddad136-71a0-433f-adce-a5fb28c0c408，含全部凭证）已作废；其余同 v0.2.9。
 // @author 陆隐 / 小银
 // @match https://chat.deepseek.com/*
 // @grant none
@@ -16,15 +16,15 @@
 /* ================= 配置（按需改） ================= */
 var CFG = {
 PINNED_TITLE: '记忆库', // 置顶对话标题（ID 找不到时才按标题找）
-PINNED_SESSION_ID: '2ddad136-71a0-433f-adce-a5fb28c0c408', // 置顶对话 session id（优先）
+PINNED_SESSION_ID: '71688521-faae-4714-bbc6-d908380f7170', // 置顶对话 session id（优先）
 LIST_URL: '/api/v0/chat_session/fetch_page',
 HISTORY_URL: '/api/v0/chat/history_messages',
 COMPLETION_PATH: '/api/v0/chat/completion',
 MAX_MEMORY_CHARS: 8000, // 记忆块总长上限，超出截断
 MAX_BACKGROUND_CHARS: 2500, // 背景（账号状态）部分上限，超出只留摘要
 TOAST_MS: 3000,
-BLOCK_BEGIN: '[[PINMEM:v2.9 BEGIN]]',
-BLOCK_END: '[[PINMEM:v2.9 END]]'
+BLOCK_BEGIN: '[[PINMEM:v3.0 BEGIN]]',
+BLOCK_END: '[[PINMEM:v3.0 END]]'
 };
 // 安全：只读置顶对话的文字记录，不从 GitHub 拉记忆库文件；
 // 记忆只存在浏览器内存里，不写 localStorage。
@@ -312,7 +312,7 @@ setTimeout(function () { buildMemory(true).then(resolve);}, 2000);
 }
 if (!hist) {
 memCache = { text: '', at: Date.now(), ok: false};
-status('记忆：未注入 v0.2.9（' + diag.token + (diag.apiCode? '，' + diag.apiCode: '') + '）', false);
+status('记忆：未注入 v0.3.0（' + diag.token + (diag.apiCode? '，' + diag.apiCode: '') + '）', false);
 return '';
 }
 var parts = splitMemory(hist);
@@ -500,7 +500,7 @@ document.addEventListener('DOMContentLoaded', function () { buildMemory();});
 } else {
 buildMemory();
 }
-log('已启动 v0.2.9');
+log('已启动 v0.3.0');
 }
 boot();
 })();
