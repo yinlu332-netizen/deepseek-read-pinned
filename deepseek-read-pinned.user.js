@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name DeepSeek 读置顶对话（记忆库自动注入）
 // @namespace https://github.com/yinlu332-netizen/deepseek-read-pinned
-// @version 0.2.8
-// @description 新开 DeepSeek 对话时，自动读取置顶的“记忆库”对话并注入为记忆。v0.2.8：内容提取加递归兜底（抠消息对象里所有长字符串），空内容时状态标记显示首条消息的字段名；其余同 v0.2.7。
+// @version 0.2.9
+// @description 新开 DeepSeek 对话时，自动读取置顶的“记忆库”对话并注入为记忆。v0.2.9：按 DeepSeek 二次回复重排内容提取入口——content（string/array）→content_text/contentText→thinking/tool→contentFragments（仅 kind=text），只拼 user/assistant；其余同 v0.2.8。
 // @author 陆隐 / 小银
 // @match https://chat.deepseek.com/*
 // @grant none
@@ -23,8 +23,8 @@ COMPLETION_PATH: '/api/v0/chat/completion',
 MAX_MEMORY_CHARS: 8000, // 记忆块总长上限，超出截断
 MAX_BACKGROUND_CHARS: 2500, // 背景（账号状态）部分上限，超出只留摘要
 TOAST_MS: 3000,
-BLOCK_BEGIN: '[[PINMEM:v2.8 BEGIN]]',
-BLOCK_END: '[[PINMEM:v2.8 END]]'
+BLOCK_BEGIN: '[[PINMEM:v2.9 BEGIN]]',
+BLOCK_END: '[[PINMEM:v2.9 END]]'
 };
 // 安全：只读置顶对话的文字记录，不从 GitHub 拉记忆库文件；
 // 记忆只存在浏览器内存里，不写 localStorage。
@@ -217,30 +217,46 @@ var firstMsgKeys = '';
 for (var i = 0; i < msgs.length; i++) {
 var m = msgs[i] || {};
 if (i === 0) firstMsgKeys = Object.keys(m).join(',');
-// 角色：message_role / role / type（deepseek-pp 经 normalizeRole 归一化）
+// 角色：message_role / role / type，取第一个存在的字符串；只拼 user 与 assistant
 var rawRole = m.message_role || m.role || m.type || m.sender || '';
-var role = (/user/i.test(String(rawRole)) || m.is_user) ? 'user' : 'assistant';
-// 内容：优先从 contentFragments 拼接（deepseek-pp 的 extractContentFragments），再试 content/text/message
+var roleStr = String(rawRole || '').toLowerCase();
+var isUser = /user/.test(roleStr) || !!m.is_user;
+var isAsst = /assistant|deepseek|ai|bot/.test(roleStr) || (!isUser && roleStr !== '');
+if (!isUser && !isAsst) continue;
+// 内容提取（按 deepseek-pp 的 extractContentFragments 入口顺序）：
+// ① content（string 直接取；array 展开每个 part 的 text/content/value）
+// ② content_text / contentText
+// ③ thinking_content / tool_result（补充）
+// ④ contentFragments（归一化结果，原始消息一般不带；只取 kind==='text'）
 var text = '';
-if (Array.isArray(m.contentFragments)) {
-text = m.contentFragments.map(function (f) {
+function expandContent(c) {
+if (typeof c === 'string') return c;
+if (Array.isArray(c)) return c.map(function (part) {
+if (typeof part === 'string') return part;
+if (part && typeof part === 'object') return part.text || part.content || part.value || '';
+return '';
+}).join('');
+if (c && typeof c === 'object') return c.text || c.content || c.value || '';
+return '';
+}
+if (m.content !== undefined) text = expandContent(m.content);
+if (!text && m.content_text !== undefined) text = String(m.content_text);
+if (!text && m.contentText !== undefined) text = String(m.contentText);
+if (!text && m.text !== undefined) text = expandContent(m.text);
+if (!text && m.message !== undefined) text = expandContent(m.message);
+if (!text && Array.isArray(m.contentFragments)) {
+text = m.contentFragments.filter(function (f) { return !f || typeof f !== 'object' || !f.kind || f.kind === 'text'; }).map(function (f) {
 if (typeof f === 'string') return f;
 if (f && typeof f === 'object') return f.text || f.content || f.value || '';
 return '';
 }).join('');
 }
-if (!text) {
-var c = (m.content !== undefined) ? m.content : (m.text !== undefined ? m.text : (m.message !== undefined ? m.message : (m.content_text !== undefined ? m.content_text : '')));
-if (typeof c === 'string') text = c;
-else if (c && typeof c === 'object') {
-if (Array.isArray(c)) { text = c.map(function (part) { return (typeof part === 'string') ? part : (part && (part.text || part.content || '')); }).join('');}
-else text = c.text || c.content || c.value || '';
-}
-}
+if (!text && m.thinking_content) text = String(m.thinking_content);
+if (!text && (m.tool_result || m.toolResult)) text = String(m.tool_result || m.toolResult);
 if (!text && m.parts) text = String(m.parts);
 // 兜底：递归抠消息对象里所有长字符串（排除 id/时间戳等元数据），拼成文本
 if (!text) {
-var skipKeys = { id: 1, message_id: 1, messageId: 1, uuid: 1, parent_id: 1, parent_message_id: 1, parentMessageId: 1, message_role: 1, role: 1, type: 1, sender: 1, is_user: 1, created_at: 1, updated_at: 1, timestamp: 1, model: 1, model_type: 1, status: 1 };
+var skipKeys = { id: 1, message_id: 1, messageId: 1, uuid: 1, parent_id: 1, parent_message_id: 1, parentMessageId: 1, message_role: 1, role: 1, type: 1, sender: 1, is_user: 1, created_at: 1, updated_at: 1, createdAt: 1, updatedAt: 1, inserted_at: 1, timestamp: 1, model: 1, model_type: 1, modelType: 1, status: 1, search_enabled: 1, searchEnabled: 1, thinking_enabled: 1, thinkingEnabled: 1 };
 var found = [];
 (function collect(o, depth) {
 if (!o || depth > 4) return;
@@ -251,7 +267,7 @@ if (typeof o === 'object') { for (var k in o) { if (!skipKeys[k]) collect(o[k], 
 text = found.join('');
 }
 if (m.ref_file_ids && m.ref_file_ids.length) text += '\n[附件 ' + m.ref_file_ids.length + ' 个，原文见置顶对话里的文件]';
-if (text) out.push((role === 'user' ? '用户' : 'DeepSeek') + '：' + String(text));
+if (text) out.push((isUser ? '用户' : 'DeepSeek') + '：' + String(text));
 }
 if (!out.length) diag.apiCode = 'API 0 msgs:' + msgs.length + ' 空内容 首条键:' + firstMsgKeys;
 return out.join('\n\n');
@@ -296,7 +312,7 @@ setTimeout(function () { buildMemory(true).then(resolve);}, 2000);
 }
 if (!hist) {
 memCache = { text: '', at: Date.now(), ok: false};
-status('记忆：未注入 v0.2.8（' + diag.token + (diag.apiCode? '，' + diag.apiCode: '') + '）', false);
+status('记忆：未注入 v0.2.9（' + diag.token + (diag.apiCode? '，' + diag.apiCode: '') + '）', false);
 return '';
 }
 var parts = splitMemory(hist);
@@ -484,7 +500,7 @@ document.addEventListener('DOMContentLoaded', function () { buildMemory();});
 } else {
 buildMemory();
 }
-log('已启动 v0.2.8');
+log('已启动 v0.2.9');
 }
 boot();
 })();

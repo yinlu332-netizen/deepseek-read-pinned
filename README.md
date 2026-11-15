@@ -41,6 +41,7 @@ DeepSeek 官方没有跨会话持久记忆，新开对话就是空白的。之�
 
 ## 版本历史
 
+- **v0.2.9**：按 DeepSeek 二次回复重排内容提取入口——`content`（string/array）→`content_text`/`contentText`→`thinking_content`/`tool_result`→`contentFragments`（仅 kind=text），只拼 user/assistant；其余同 v0.2.8。
 - **v0.2.8**：内容提取加递归兜底（抠消息对象里所有长字符串，排除 id/时间戳等元数据），空内容时状态标记显示首条消息的字段名；其余同 v0.2.7。
 - **v0.2.7**：按 DeepSeek 回复的 deepseek-pp 结论修历史解析——业务数据四级兼容（`data.biz_data`→`biz_data`→`data`→顶层），消息数组直接读 `chat_messages`，内容优先从 `contentFragments` 拼接；其余同 v0.2.6。
 - **v0.2.6**：历史解析改为递归深搜消息数组（最多 5 层），API 0 但解析为空时状态标记显示顶层键与 biz_data 类型/键；其余同 v0.2.5。
