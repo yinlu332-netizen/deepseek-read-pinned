@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name DeepSeek 读置顶对话（记忆库自动注入）
 // @namespace https://github.com/yinlu332-netizen/deepseek-read-pinned
-// @version 0.2.0
-// @description 新开 DeepSeek 对话时，自动读取置顶的“记忆库”对话并注入为记忆。v0.2.0：硬约束全带、背景按需精简；常驻状态指示；会话 ID 优先匹配；凭证明文校验；messages[] 有 system 角色就插 system，没有就退回 user prompt。
+// @version 0.2.1
+// @description 新开 DeepSeek 对话时，自动读取置顶的“记忆库”对话并注入为记忆。v0.2.1：历史接口需 Bearer token 鉴权（仅 cookie 会报 INVALID_TOKEN），改为从 localStorage/sessionStorage/cookie 自动找 token 并带 Authorization 头；其余同 v0.2.0。
 // @author 陆隐 / 小银
 // @match https://chat.deepseek.com/*
 // @grant none
@@ -23,8 +23,8 @@ COMPLETION_PATH: '/api/v0/chat/completion',
 MAX_MEMORY_CHARS: 8000, // 记忆块总长上限，超出截断
 MAX_BACKGROUND_CHARS: 2500, // 背景（账号状态）部分上限，超出只留摘要
 TOAST_MS: 3000,
-BLOCK_BEGIN: '[[PINMEM:v2 BEGIN]]',
-BLOCK_END: '[[PINMEM:v2 END]]'
+BLOCK_BEGIN: '[[PINMEM:v2.1 BEGIN]]',
+BLOCK_END: '[[PINMEM:v2.1 END]]'
 };
 // 安全：只读置顶对话的文字记录，不从 GitHub 拉记忆库文件；
 // 记忆只存在浏览器内存里，不写 localStorage。
@@ -36,6 +36,59 @@ try { console.log.apply(console, ['[PinMem]'].concat([].slice.call(arguments)));
 function trunc(s, n) {
 s = String(s || '');
 return s.length > n? s.slice(0, n) + '\n…（已截断）': s;
+}
+
+/* ================= 鉴权 token（v0.2.1 新增） ================= */
+// DeepSeek 历史/会话接口只认 Authorization: Bearer <token>，光带 cookie 会报 INVALID_TOKEN（code 40003）。
+// token 存在 localStorage/sessionStorage 里（页面 JS 自己读出来放进请求头），这里按常见键名找，
+// 找不到就全库扫一个 JWT 形态的值（xxx.yyy.zzz）；再不行试 cookie 里的 token。只记“从哪找到”，绝不打印 token 本身。
+var TOKEN_KEYS = ['token', 'auth_token', 'access_token', 'user_token', 'deepseek_token', 'ds_token', 'Authorization', 'authToken', 'accessToken', 'jwt', 'session_token'];
+var JWT_RE = /^[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}$/;
+function getAuthToken() {
+var stores = [];
+try { if (window.localStorage) stores.push(['localStorage', window.localStorage]);} catch (e) {}
+try { if (window.sessionStorage) stores.push(['sessionStorage', window.sessionStorage]);} catch (e) {}
+for (var s = 0; s < stores.length; s++) {
+var name = stores[s][0], st = stores[s][1];
+for (var k = 0; k < TOKEN_KEYS.length; k++) {
+try {
+var v = st.getItem(TOKEN_KEYS[k]);
+if (v) {
+if (v.charAt(0) === '{') {
+try {
+var o = JSON.parse(v);
+var t = o.token || o.access_token || o.auth_token || o.accessToken;
+if (t) { log('token 来源：' + name + '[' + TOKEN_KEYS[k] + '] JSON'); return String(t);}
+} catch (e2) {}
+}
+log('token 来源：' + name + '[' + TOKEN_KEYS[k] + ']');
+return String(v).replace(/^Bearer\s+/i, '');
+}
+} catch (e3) {}
+}
+try {
+for (var i = 0; i < st.length; i++) {
+var kk = st.key(i);
+var vv = st.getItem(kk);
+if (vv && JWT_RE.test(String(vv).trim())) {
+log('token 来源：' + name + '[' + kk + '] JWT 扫描');
+return String(vv).trim();
+}
+}
+} catch (e4) {}
+}
+try {
+var m = document.cookie.match(/(?:^|;\s*)token=([^;]+)/);
+if (m && m[1]) { log('token 来源：cookie token'); return decodeURIComponent(m[1]);}
+} catch (e5) {}
+log('未找到 token（历史接口将报 INVALID_TOKEN）');
+return '';
+}
+function authHeaders() {
+var t = getAuthToken();
+var h = {};
+if (t) h['Authorization'] = 'Bearer ' + t;
+return h;
 }
 
 /* ================= 常驻状态指示 ================= */
@@ -77,9 +130,10 @@ var memCache = { text: '', at: 0, ok: false};
 
 /* ================= 读置顶对话 ================= */
 function fetchChatList() {
-return fetch(CFG.LIST_URL, { credentials: 'include'})
+return fetch(CFG.LIST_URL, { credentials: 'include', headers: authHeaders()})
 .then(function (r) { return r.json();})
 .then(function (j) {
+if (j && j.code !== undefined && j.code !== 0) { log('会话列表 API 返回 code', j.code, j.msg); return null;}
 var arr = (j && j.data && (j.data.list || j.data.chat_sessions || j.data.sessions)) || j.data || j.list || [];
 if (!Array.isArray(arr)) return null;
 for (var i = 0; i < arr.length; i++) {
@@ -94,9 +148,10 @@ return null;
 
 function fetchHistory(sessionId) {
 var url = CFG.HISTORY_URL + '?chat_session_id=' + encodeURIComponent(sessionId);
-return fetch(url, { credentials: 'include'})
+return fetch(url, { credentials: 'include', headers: authHeaders()})
 .then(function (r) { return r.json();})
 .then(function (j) {
+if (j && j.code !== undefined && j.code !== 0) { log('历史 API 返回 code', j.code, j.msg); return '';}
 var msgs = (j && j.data && (j.data.messages || j.data.history || j.data.list)) || j.data || j.messages || [];
 if (!Array.isArray(msgs)) return '';
 var out = [];
@@ -320,7 +375,7 @@ document.addEventListener('DOMContentLoaded', function () { buildMemory();});
 } else {
 buildMemory();
 }
-log('已启动 v0.2.0');
+log('已启动 v0.2.1');
 }
 boot();
 })();
