@@ -30,7 +30,7 @@ DeepSeek 官方没有跨会话持久记忆，新开对话就是空白的。之�
 
 | 环节 | 做法 |
 |---|---|
-| 读置顶对话 | 优先按会话 ID（内置）拉 `GET /api/v0/chat/history_messages?chat_session_id=<id>`；ID 拉不到再按标题“记忆库”在 `GET /api/v0/chat_session/fetch_page` 里找。历史/会话接口只认 `Authorization: Bearer <token>`（仅 cookie 会报 `INVALID_TOKEN` code 40003），token 从页面 localStorage/sessionStorage/cookie 自动找并带上
+| 读置顶对话 | 优先按会话 ID（内置）拉 `GET /api/v0/chat/history_messages?chat_session_id=<id>`；ID 拉不到再按标题“记忆库”在 `GET /api/v0/chat_session/fetch_page` 里找。历史/会话接口只认 `Authorization: Bearer <token>`（仅 cookie 会报 `INVALID_TOKEN` code 40003），token 优先从应用自己的 /api/v0/* 请求头里拦截（fetch/XHR 双路），再从 localStorage/sessionStorage/cookie 找
 | 分组注入 | 记忆拆成两组：硬约束（固定工作协议、安全规则）每次全带；背景（账号状态）精简版（上限 2500 字），减少稀释和截断风险 |
 | 注入层 | 请求体有 `messages` 数组 → 在数组头插一条 `{role:"system"}` 记忆（系统层优先）；只有 `prompt` 字符串 → 退回 user prompt 最前面；都没有 → 不注入 |
 | 拦截通道 | `XMLHttpRequest` + `fetch` + `WebSocket` 三路（DeepSeek System Prompt 也是三路拦截） |
@@ -41,6 +41,9 @@ DeepSeek 官方没有跨会话持久记忆，新开对话就是空白的。之�
 
 ## 版本历史
 
+- **v0.2.6**：历史解析改为递归深搜消息数组（最多 5 层），API 0 但解析为空时状态标记显示顶层键与 biz_data 类型/键；其余同 v0.2.5。
+- **v0.2.5**：内部 API 用 `biz_code`/`biz_data`（不是 `code`/`data`），两种信封都认；其余同 v0.2.4。
+- **v0.2.4**：历史解析更宽容（多键名/多内容字段/对象内容），API 0 但解析为空时状态标记显示响应数据键名；其余同 v0.2.3。
 - **v0.2.3**：token 不在 localStorage 里，改从应用自己的 API 请求头里拦截 `Authorization`（fetch/XHR 双路），取不到时延迟 2 秒重试一次；其余同 v0.2.2。
 - **v0.2.2**：状态标记显示诊断信息（版本号、token 有无、API 返回码），不用开控制台就能定位失败原因；其余同 v0.2.1。
 - **v0.2.1**：修历史接口鉴权——只带 cookie 会报 `INVALID_TOKEN`（code 40003），改为从 localStorage/sessionStorage/cookie 自动找 token 并带 `Authorization: Bearer` 头；另：Chrome 需在扩展详情里开启“允许运行用户脚本”，否则脚本装上了也不会运行（Tampermonkey 顶部会有提示横幅）。
