@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name DeepSeek 读置顶对话（记忆库自动注入）
 // @namespace https://github.com/yinlu332-netizen/deepseek-read-pinned
-// @version 0.2.2
-// @description 新开 DeepSeek 对话时，自动读取置顶的“记忆库”对话并注入为记忆。v0.2.2：状态标记显示诊断信息（版本号、token 有无、API 返回码），不用开控制台就能定位失败原因；其余同 v0.2.1。
+// @version 0.2.3
+// @description 新开 DeepSeek 对话时，自动读取置顶的“记忆库”对话并注入为记忆。v0.2.3：token 不在 localStorage 里，改从应用自己的 API 请求头里拦截 Authorization（fetch/XHR 双路），并在取不到时延迟重试一次；其余同 v0.2.2。
 // @author 陆隐 / 小银
 // @match https://chat.deepseek.com/*
 // @grant none
@@ -23,8 +23,8 @@ COMPLETION_PATH: '/api/v0/chat/completion',
 MAX_MEMORY_CHARS: 8000, // 记忆块总长上限，超出截断
 MAX_BACKGROUND_CHARS: 2500, // 背景（账号状态）部分上限，超出只留摘要
 TOAST_MS: 3000,
-BLOCK_BEGIN: '[[PINMEM:v2.2 BEGIN]]',
-BLOCK_END: '[[PINMEM:v2.2 END]]'
+BLOCK_BEGIN: '[[PINMEM:v2.3 BEGIN]]',
+BLOCK_END: '[[PINMEM:v2.3 END]]'
 };
 // 安全：只读置顶对话的文字记录，不从 GitHub 拉记忆库文件；
 // 记忆只存在浏览器内存里，不写 localStorage。
@@ -45,6 +45,7 @@ return s.length > n? s.slice(0, n) + '\n…（已截断）': s;
 var TOKEN_KEYS = ['token', 'auth_token', 'access_token', 'user_token', 'deepseek_token', 'ds_token', 'Authorization', 'authToken', 'accessToken', 'jwt', 'session_token'];
 var JWT_RE = /^[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}$/;
 function getAuthToken() {
+if (capturedToken) return capturedToken;
 var stores = [];
 try { if (window.localStorage) stores.push(['localStorage', window.localStorage]);} catch (e) {}
 try { if (window.sessionStorage) stores.push(['sessionStorage', window.sessionStorage]);} catch (e) {}
@@ -90,6 +91,30 @@ var t = getAuthToken();
 var h = {};
 if (t) { h['Authorization'] = 'Bearer ' + t; diag.token = '有 token';}
 return h;
+}
+
+/* ================= 从应用请求里拦截 token（v0.2.3 新增） ================= */
+// token 不在 localStorage/sessionStorage/cookie 的常规位置，改从 DeepSeek 应用自己的 API 请求头里拿：
+// 应用每次调 /api/v0/* 都会带 Authorization，拦截下来存着，自己调历史接口时复用。
+var capturedToken = '';
+function captureAuthFromHeaders(headers) {
+if (!headers || capturedToken) return;
+var auth = null;
+try {
+if (typeof Headers !== 'undefined' && headers instanceof Headers) {
+auth = headers.get('Authorization') || headers.get('authorization');
+} else if (Array.isArray(headers)) {
+for (var i = 0; i < headers.length; i++) {
+if (String(headers[i][0]).toLowerCase() === 'authorization') { auth = headers[i][1]; break;}
+}
+} else if (typeof headers === 'object') {
+auth = headers['Authorization'] || headers['authorization'];
+}
+} catch (e) {}
+if (auth) {
+var t = String(auth).replace(/^Bearer\s+/i, '').trim();
+if (t && t.length > 10) { capturedToken = t; diag.token = '有 token（拦截）'; log('token 来源：拦截应用请求');}
+}
 }
 
 /* ================= 常驻状态指示 ================= */
@@ -190,7 +215,8 @@ return { hard: hardText, bg: bgText};
 }
 
 // 优先按会话 ID 拉；ID 拉不到再按标题找。
-function buildMemory() {
+// 若第一次失败（大概率是 token 还没拦截到——应用刚加载还没发 API 请求），等 2 秒再试一次。
+function buildMemory(retry) {
 if (memCache.ok) return Promise.resolve(memCache.text);
 return fetchHistory(CFG.PINNED_SESSION_ID).then(function (hist) {
 if (hist) return hist;
@@ -199,9 +225,15 @@ if (found && found.id) return fetchHistory(found.id);
 return '';
 });
 }).then(function (hist) {
+if (!hist && !retry) {
+status('记忆：加载中（等 token 重试…）', true);
+return new Promise(function (resolve) {
+setTimeout(function () { buildMemory(true).then(resolve);}, 2000);
+});
+}
 if (!hist) {
 memCache = { text: '', at: Date.now(), ok: false};
-status('记忆：未注入 v0.2.1（' + diag.token + (diag.apiCode? '，' + diag.apiCode: '') + '）', false);
+status('记忆：未注入 v0.2.3（' + diag.token + (diag.apiCode? '，' + diag.apiCode: '') + '）', false);
 return '';
 }
 var parts = splitMemory(hist);
@@ -286,8 +318,17 @@ function hookXHR() {
 if (typeof XMLHttpRequest === 'undefined' ||!XMLHttpRequest.prototype) return false;
 var P = XMLHttpRequest.prototype;
 if (P.__pinmemHooked) return true;
-var origOpen = P.open, origSend = P.send;
+var origOpen = P.open, origSend = P.send, origSetHeader = P.setRequestHeader;
 P.open = function (method, url) { this.__pinmemUrl = url; return origOpen.apply(this, arguments);};
+P.setRequestHeader = function (name, value) {
+try {
+if (String(name).toLowerCase() === 'authorization' && value) {
+var t = String(value).replace(/^Bearer\s+/i, '').trim();
+if (t && t.length > 10 && !capturedToken) { capturedToken = t; diag.token = '有 token（拦截）'; log('token 来源：拦截 XHR 请求头');}
+}
+} catch (e) {}
+return origSetHeader.apply(this, arguments);
+};
 P.send = function (body) {
 var self = this;
 try {
@@ -309,6 +350,7 @@ var orig = window.fetch;
 window.fetch = function (input, init) {
 try {
 var url = typeof input === 'string'? input: (input && input.url) || '';
+if (url.indexOf('/api/v0/') !== -1 && init && init.headers) captureAuthFromHeaders(init.headers);
 if (isCompletion(url) && init && typeof init.body === 'string') {
 var r = injectIntoBody(init.body);
 if (r.injected) init = Object.assign({}, init, { body: r.body});
@@ -379,7 +421,7 @@ document.addEventListener('DOMContentLoaded', function () { buildMemory();});
 } else {
 buildMemory();
 }
-log('已启动 v0.2.2');
+log('已启动 v0.2.3');
 }
 boot();
 })();

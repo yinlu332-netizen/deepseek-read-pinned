@@ -41,6 +41,7 @@ DeepSeek 官方没有跨会话持久记忆，新开对话就是空白的。之�
 
 ## 版本历史
 
+- **v0.2.3**：token 不在 localStorage 里，改从应用自己的 API 请求头里拦截 `Authorization`（fetch/XHR 双路），取不到时延迟 2 秒重试一次；其余同 v0.2.2。
 - **v0.2.2**：状态标记显示诊断信息（版本号、token 有无、API 返回码），不用开控制台就能定位失败原因；其余同 v0.2.1。
 - **v0.2.1**：修历史接口鉴权——只带 cookie 会报 `INVALID_TOKEN`（code 40003），改为从 localStorage/sessionStorage/cookie 自动找 token 并带 `Authorization: Bearer` 头；另：Chrome 需在扩展详情里开启“允许运行用户脚本”，否则脚本装上了也不会运行（Tampermonkey 顶部会有提示横幅）。
 - **v0.2.0**：按 DeepSeek 的建议改进——硬约束全带、背景精简；常驻状态指示；会话 ID 优先匹配；凭证明文校验；messages[] 优先插 system 角色，WebSocket 第三通道。最佳方案（小银与 DeepSeek 两轮对比后收敛）。
