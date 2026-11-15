@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name DeepSeek 读置顶对话（记忆库自动注入）
 // @namespace https://github.com/yinlu332-netizen/deepseek-read-pinned
-// @version 0.2.7
-// @description 新开 DeepSeek 对话时，自动读取置顶的“记忆库”对话并注入为记忆。v0.2.7：按 deepseek-pp 的结论修历史解析——业务数据四级兼容（data.biz_data→biz_data→data→顶层），消息数组直接读 chat_messages，内容从 contentFragments 拼接；其余同 v0.2.6。
+// @version 0.2.8
+// @description 新开 DeepSeek 对话时，自动读取置顶的“记忆库”对话并注入为记忆。v0.2.8：内容提取加递归兜底（抠消息对象里所有长字符串），空内容时状态标记显示首条消息的字段名；其余同 v0.2.7。
 // @author 陆隐 / 小银
 // @match https://chat.deepseek.com/*
 // @grant none
@@ -23,8 +23,8 @@ COMPLETION_PATH: '/api/v0/chat/completion',
 MAX_MEMORY_CHARS: 8000, // 记忆块总长上限，超出截断
 MAX_BACKGROUND_CHARS: 2500, // 背景（账号状态）部分上限，超出只留摘要
 TOAST_MS: 3000,
-BLOCK_BEGIN: '[[PINMEM:v2.7 BEGIN]]',
-BLOCK_END: '[[PINMEM:v2.7 END]]'
+BLOCK_BEGIN: '[[PINMEM:v2.8 BEGIN]]',
+BLOCK_END: '[[PINMEM:v2.8 END]]'
 };
 // 安全：只读置顶对话的文字记录，不从 GitHub 拉记忆库文件；
 // 记忆只存在浏览器内存里，不写 localStorage。
@@ -213,8 +213,10 @@ log('历史 API 0 但业务数据里没有 chat_messages，业务数据键：', 
 return '';
 }
 var out = [];
+var firstMsgKeys = '';
 for (var i = 0; i < msgs.length; i++) {
 var m = msgs[i] || {};
+if (i === 0) firstMsgKeys = Object.keys(m).join(',');
 // 角色：message_role / role / type（deepseek-pp 经 normalizeRole 归一化）
 var rawRole = m.message_role || m.role || m.type || m.sender || '';
 var role = (/user/i.test(String(rawRole)) || m.is_user) ? 'user' : 'assistant';
@@ -236,10 +238,22 @@ else text = c.text || c.content || c.value || '';
 }
 }
 if (!text && m.parts) text = String(m.parts);
+// 兜底：递归抠消息对象里所有长字符串（排除 id/时间戳等元数据），拼成文本
+if (!text) {
+var skipKeys = { id: 1, message_id: 1, messageId: 1, uuid: 1, parent_id: 1, parent_message_id: 1, parentMessageId: 1, message_role: 1, role: 1, type: 1, sender: 1, is_user: 1, created_at: 1, updated_at: 1, timestamp: 1, model: 1, model_type: 1, status: 1 };
+var found = [];
+(function collect(o, depth) {
+if (!o || depth > 4) return;
+if (typeof o === 'string') { if (o.length > 1) found.push(o); return; }
+if (Array.isArray(o)) { for (var a = 0; a < o.length; a++) collect(o[a], depth + 1); return; }
+if (typeof o === 'object') { for (var k in o) { if (!skipKeys[k]) collect(o[k], depth + 1); } }
+})(m, 0);
+text = found.join('');
+}
 if (m.ref_file_ids && m.ref_file_ids.length) text += '\n[附件 ' + m.ref_file_ids.length + ' 个，原文见置顶对话里的文件]';
 if (text) out.push((role === 'user' ? '用户' : 'DeepSeek') + '：' + String(text));
 }
-if (!out.length) diag.apiCode = 'API 0 msgs:' + msgs.length + ' 空内容';
+if (!out.length) diag.apiCode = 'API 0 msgs:' + msgs.length + ' 空内容 首条键:' + firstMsgKeys;
 return out.join('\n\n');
 })
 .catch(function (e) { log('fetchHistory 失败', e); return '';});
@@ -282,7 +296,7 @@ setTimeout(function () { buildMemory(true).then(resolve);}, 2000);
 }
 if (!hist) {
 memCache = { text: '', at: Date.now(), ok: false};
-status('记忆：未注入 v0.2.7（' + diag.token + (diag.apiCode? '，' + diag.apiCode: '') + '）', false);
+status('记忆：未注入 v0.2.8（' + diag.token + (diag.apiCode? '，' + diag.apiCode: '') + '）', false);
 return '';
 }
 var parts = splitMemory(hist);
@@ -470,7 +484,7 @@ document.addEventListener('DOMContentLoaded', function () { buildMemory();});
 } else {
 buildMemory();
 }
-log('已启动 v0.2.7');
+log('已启动 v0.2.8');
 }
 boot();
 })();
