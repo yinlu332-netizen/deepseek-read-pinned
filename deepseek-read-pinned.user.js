@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name DeepSeek 读置顶对话（记忆库自动注入）
 // @namespace https://github.com/yinlu332-netizen/deepseek-read-pinned
-// @version 0.2.4
-// @description 新开 DeepSeek 对话时，自动读取置顶的“记忆库”对话并注入为记忆。v0.2.4：历史解析更宽容（多键名/多内容字段/对象内容），API 0 但解析为空时状态标记显示响应数据键名；其余同 v0.2.3。
+// @version 0.2.5
+// @description 新开 DeepSeek 对话时，自动读取置顶的“记忆库”对话并注入为记忆。v0.2.5：内部 API 用 biz_code/biz_data（不是 code/data），两种都认；其余同 v0.2.4。
 // @author 陆隐 / 小银
 // @match https://chat.deepseek.com/*
 // @grant none
@@ -23,8 +23,8 @@ COMPLETION_PATH: '/api/v0/chat/completion',
 MAX_MEMORY_CHARS: 8000, // 记忆块总长上限，超出截断
 MAX_BACKGROUND_CHARS: 2500, // 背景（账号状态）部分上限，超出只留摘要
 TOAST_MS: 3000,
-BLOCK_BEGIN: '[[PINMEM:v2.4 BEGIN]]',
-BLOCK_END: '[[PINMEM:v2.4 END]]'
+BLOCK_BEGIN: '[[PINMEM:v2.5 BEGIN]]',
+BLOCK_END: '[[PINMEM:v2.5 END]]'
 };
 // 安全：只读置顶对话的文字记录，不从 GitHub 拉记忆库文件；
 // 记忆只存在浏览器内存里，不写 localStorage。
@@ -157,12 +157,21 @@ var memCache = { text: '', at: 0, ok: false};
 var diag = { token: '未知', apiCode: ''};
 
 /* ================= 读置顶对话 ================= */
+// DeepSeek 内部 API 用 biz_code/biz_msg/biz_data（不是 code/msg/data），两种都认。
+function norm(j) {
+if (!j || typeof j !== 'object') return { code: -1, data: null, msg: ''};
+var code = (j.code !== undefined) ? j.code : j.biz_code;
+var data = (j.data !== undefined) ? j.data : j.biz_data;
+return { code: code, data: data, msg: j.msg || j.biz_msg || ''};
+}
+
 function fetchChatList() {
 return fetch(CFG.LIST_URL, { credentials: 'include', headers: authHeaders()})
 .then(function (r) { return r.json();})
 .then(function (j) {
-if (j && j.code !== undefined && j.code !== 0) { log('会话列表 API 返回 code', j.code, j.msg); return null;}
-var arr = (j && j.data && (j.data.list || j.data.chat_sessions || j.data.sessions)) || j.data || j.list || [];
+var n = norm(j);
+if (n.code !== undefined && n.code !== 0) { log('会话列表 API 返回 code', n.code, n.msg); return null;}
+var arr = (n.data && (n.data.list || n.data.chat_sessions || n.data.sessions)) || n.data || j.list || [];
 if (!Array.isArray(arr)) return null;
 for (var i = 0; i < arr.length; i++) {
 var it = arr[i] || {};
@@ -179,9 +188,10 @@ var url = CFG.HISTORY_URL + '?chat_session_id=' + encodeURIComponent(sessionId);
 return fetch(url, { credentials: 'include', headers: authHeaders()})
 .then(function (r) { return r.json();})
 .then(function (j) {
-if (j && j.code !== undefined && j.code !== 0) { diag.apiCode = 'API ' + j.code; log('历史 API 返回 code', j.code, j.msg); return '';}
+var n = norm(j);
+if (n.code !== undefined && n.code !== 0) { diag.apiCode = 'API ' + n.code; log('历史 API 返回 code', n.code, n.msg); return '';}
 diag.apiCode = 'API 0';
-var data = (j && j.data !== undefined) ? j.data : j;
+var data = (n.data !== undefined && n.data !== null) ? n.data : j;
 var msgs = null;
 if (Array.isArray(data)) msgs = data;
 else if (data && typeof data === 'object') {
@@ -256,7 +266,7 @@ setTimeout(function () { buildMemory(true).then(resolve);}, 2000);
 }
 if (!hist) {
 memCache = { text: '', at: Date.now(), ok: false};
-status('记忆：未注入 v0.2.4（' + diag.token + (diag.apiCode? '，' + diag.apiCode: '') + '）', false);
+status('记忆：未注入 v0.2.5（' + diag.token + (diag.apiCode? '，' + diag.apiCode: '') + '）', false);
 return '';
 }
 var parts = splitMemory(hist);
@@ -444,7 +454,7 @@ document.addEventListener('DOMContentLoaded', function () { buildMemory();});
 } else {
 buildMemory();
 }
-log('已启动 v0.2.4');
+log('已启动 v0.2.5');
 }
 boot();
 })();
