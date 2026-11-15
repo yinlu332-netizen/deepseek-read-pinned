@@ -30,10 +30,19 @@ DeepSeek 官方没有跨会话持久记忆，新开对话就是空白的。之�
 
 | 环节 | 做法 |
 |---|---|
-| 读置顶对话 | `GET /api/v0/chat_session/fetch_page` 找置顶对话 → `GET /api/v0/chat/history_messages?chat_session_id=<id>` 拉全部消息 |
-| 注入 | 接管 `XMLHttpRequest`（DeepSeek 网页走 XHR 发 completion，fetch 只是兜底），只在“新对话首条消息”（`parent_message_id` 为 null）时，把记忆块写进同一请求体的 `prompt` 字段最前面，其余字段与请求头原样不动 |
-| 降级 | 任何一步失败（列表拉不到、历史拉不到、解析失败）都直接放行，不改请求，不会弄坏聊天 |
+| 读置顶对话 | 优先按会话 ID（内置）拉 `GET /api/v0/chat/history_messages?chat_session_id=<id>`；ID 拉不到再按标题“记忆库”在 `GET /api/v0/chat_session/fetch_page` 里找 |
+| 分组注入 | 记忆拆成两组：硬约束（固定工作协议、安全规则）每次全带；背景（账号状态）精简版（上限 2500 字），减少稀释和截断风险 |
+| 注入层 | 请求体有 `messages` 数组 → 在数组头插一条 `{role:"system"}` 记忆（系统层优先）；只有 `prompt` 字符串 → 退回 user prompt 最前面；都没有 → 不注入 |
+| 拦截通道 | `XMLHttpRequest` + `fetch` + `WebSocket` 三路（DeepSeek System Prompt 也是三路拦截） |
+| 状态指示 | 页面右下角常驻一个状态标记：成功显示“记忆：已注入（位置）”，失败显示“记忆：未注入（原因）”，不再只靠一次提示、也不静默失败 |
+| 凭证明文校验 | 拼接记忆块前正则扫一遍，疑似 API Key / Token 的明文直接剔除并提示 |
+| 降级 | 任何一步失败都直接放行，不改请求，不会弄坏聊天 |
 | 手动刷新 | 对话框输入 `/pinmem` 回车，重新拉一次置顶对话（不发网络，只刷新缓存） |
+
+## 版本历史
+
+- **v0.2.0**：按 DeepSeek 的建议改进——硬约束全带、背景精简；常驻状态指示；会话 ID 优先匹配；凭证明文校验；messages[] 优先插 system 角色，WebSocket 第三通道。最佳方案（小银与 DeepSeek 两轮对比后收敛）。
+- **v0.1.0**：首版——读置顶对话、全量注入 user prompt、XHR + fetch 双通道、成功时弹一次提示。
 
 ## 技术来源
 
